@@ -1,0 +1,7 @@
+I think you may be using the version of the code that doesn't use the drone waiting time. Check for these lines in CalculateTotalArricalTime.py: "                         #"""
+                        if total_flight_ > self.flight_range:
+                           feas = False
+                           return total_time, t_arrival, t_departure, feas
+                        #"""
+
+Because of this, your solution is being returned infeasible, because the first drone trip 0->1->7 has to wait for a time of 10000 so that the truck arrives at 7.
