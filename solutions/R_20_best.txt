@@ -1,3 +1,7 @@
 Instance: R_20
-Objective: 6139.0
-Solution: 0,18,4,5,20,19,13,10,14,12,9,1,6,2,17,8,7,15,0|11,3,-1,16|4,10,-1,17|5,19,-1,18
+Method: Random Search
+Average objective: 6545.8
+Best objective: 6139.0
+Improvement (%): 33.2
+Average running time (s): 0.595
+Best solution string: 0,18,4,5,20,19,13,10,14,12,9,1,6,2,17,8,7,15,0|11,3,-1,16|4,10,-1,17|5,19,-1,18

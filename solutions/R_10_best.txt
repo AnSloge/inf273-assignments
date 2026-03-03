@@ -1,3 +1,7 @@
 Instance: R_10
-Objective: 756.0
-Solution: 0,2,4,8,7,5,1,9,0|10,6,-1,3|1,2,-1,5|2,9,-1,6
+Method: Random Search
+Average objective: 960.3
+Best objective: 756.0
+Improvement (%): 70.5
+Average running time (s): 0.454
+Best solution string: 0,2,4,8,7,5,1,9,0|10,6,-1,3|1,2,-1,5|2,9,-1,6
