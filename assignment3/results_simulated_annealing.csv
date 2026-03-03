@@ -1,0 +1,9 @@
+Instance,Method,Average objective,Best objective,Improvement (%),Average running time (s)
+F_10,Simulated Annealing-1-reinsert,1550.8,1492.0,52.2,0.391
+F_20,Simulated Annealing-1-reinsert,3808.3,3505.0,65.6,0.525
+F_50,Simulated Annealing-1-reinsert,16374.0,14589.0,80.4,0.942
+F_100,Simulated Annealing-1-reinsert,55494.6,52646.0,79.8,2.272
+R_10,Simulated Annealing-1-reinsert,655.5,605.0,76.4,0.482
+R_20,Simulated Annealing-1-reinsert,2576.7,2333.0,74.6,0.805
+R_50,Simulated Annealing-1-reinsert,12455.5,11004.0,84.5,1.074
+R_100,Simulated Annealing-1-reinsert,48413.1,39934.0,85.4,1.860

@@ -1,0 +1,9 @@
+Instance,Method,Average objective,Best objective,Improvement (%),Average running time (s)
+F_10,Local Search-1-reinsert,1673.4,1492.0,52.2,0.439
+F_20,Local Search-1-reinsert,4222.2,3594.0,64.7,0.627
+F_50,Local Search-1-reinsert,16422.3,14964.0,79.9,1.155
+F_100,Local Search-1-reinsert,54577.5,48157.0,81.5,1.813
+R_10,Local Search-1-reinsert,785.3,634.0,75.2,0.456
+R_20,Local Search-1-reinsert,3128.5,2688.0,70.8,0.638
+R_50,Local Search-1-reinsert,13020.7,11675.0,83.5,1.006
+R_100,Local Search-1-reinsert,51860.7,46183.0,83.1,1.788
