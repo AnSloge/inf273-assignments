@@ -9,7 +9,7 @@ import sys
 import time
 from copy import deepcopy
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -22,9 +22,6 @@ from common.calculate_total_arrival_time import CalCulateTotalArrivalTime
 
 Solution = Dict[str, Any]
 Trip = Tuple[int, int, int]  # (launch_node, customer, reconvene_node)
-LARGE_INSTANCE_NAMES = {"F_50", "F_100", "R_50", "R_100"}
-
-
 def read_instance(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as file_handle:
         lines = [line.strip() for line in file_handle if line.strip() and not line.strip().startswith("#")]
@@ -48,19 +45,6 @@ def read_instance(path: str) -> Dict[str, Any]:
         "D": drone_time,
         "name": Path(path).stem,
     }
-
-
-def _scaled_iteration_budget(warmup_iters: int, main_iters: int, n_customers: int) -> Tuple[int, int]:
-    """Scale search effort mildly with size without surprising runtime blow-ups."""
-    if n_customers <= 20:
-        factor = 1.0
-    elif n_customers <= 50:
-        factor = 1.15
-    else:
-        factor = 1.30
-    scaled_warmup = int(round(warmup_iters * factor))
-    scaled_main = int(round(main_iters * factor))
-    return max(20, scaled_warmup), max(200, scaled_main)
 
 
 def initial_solution(data: Dict[str, Any]) -> Solution:
@@ -498,38 +482,6 @@ def apply_selected_operator(
     return op3_drone_reassign_best_anchor(data, incumbent, rng, n_drones=n_drones), 3
 
 
-def intensify_solution(
-    data: Dict[str, Any],
-    solution: Solution,
-    rng: random.Random,
-    n_drones: int,
-    rounds: int = 1,
-) -> Tuple[Solution, float]:
-    """Small VND-style improvement burst using all three operators."""
-    incumbent = deepcopy(solution)
-    incumbent_obj = score_solution(data, incumbent, n_drones=n_drones)
-
-    for _ in range(rounds):
-        candidates = [
-            op1_critical_customer_relocate(data, incumbent, rng, n_drones=n_drones),
-            op2_truck_2opt_repair(data, incumbent, rng, n_drones=n_drones, samples=8),
-            op3_drone_reassign_best_anchor(data, incumbent, rng, n_drones=n_drones),
-        ]
-
-        improved = False
-        for cand in candidates:
-            cand_obj = score_solution(data, cand, n_drones=n_drones)
-            if cand_obj < incumbent_obj:
-                incumbent = cand
-                incumbent_obj = cand_obj
-                improved = True
-
-        if not improved:
-            break
-
-    return incumbent, incumbent_obj
-
-
 def run_modified_simulated_annealing(
     data: Dict[str, Any],
     rng: random.Random,
@@ -539,20 +491,11 @@ def run_modified_simulated_annealing(
     main_iters: int = 9900,
     final_temp: float = 0.1,
 ) -> Tuple[Solution, float, float]:
-    n_customers = data["n_customers"]
-    warmup_iters, main_iters = _scaled_iteration_budget(warmup_iters, main_iters, n_customers)
-
     incumbent = initial_solution(data)
     incumbent_obj = score_solution(data, incumbent, n_drones=n_drones)
 
     best_solution = deepcopy(incumbent)
     best_obj = incumbent_obj
-
-    # Online operator adaptation: start from configured weights and learn during search.
-    adaptive_probs = [float(probabilities[0]), float(probabilities[1]), float(probabilities[2])]
-    op_scores = [1.0, 1.0, 1.0]
-    adapt_interval = max(80, n_customers * 2)
-    min_prob = 0.10
 
     warmup_deltas: List[float] = []
     started = time.perf_counter()
@@ -563,32 +506,26 @@ def run_modified_simulated_annealing(
             incumbent,
             rng,
             n_drones=n_drones,
-            probabilities=(adaptive_probs[0], adaptive_probs[1], adaptive_probs[2]),
+            probabilities=probabilities,
         )
 
         new_obj = score_solution(data, new_solution, n_drones=n_drones)
-        reward = 0.0
         if not math.isfinite(new_obj):
-            op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1]
             continue
+
         delta = new_obj - incumbent_obj
 
         if delta < 0:
             incumbent = new_solution
             incumbent_obj = new_obj
-            reward = 3.0
             if incumbent_obj < best_obj:
                 best_solution = deepcopy(incumbent)
                 best_obj = incumbent_obj
-                reward = 5.0
         else:
             if rng.random() < 0.8:
                 incumbent = new_solution
                 incumbent_obj = new_obj
-                reward = 1.0
             warmup_deltas.append(delta)
-
-        op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1] + reward
 
     delta_avg = mean(warmup_deltas) if warmup_deltas else 1.0
     if delta_avg <= 0 or not math.isfinite(delta_avg):
@@ -600,95 +537,31 @@ def run_modified_simulated_annealing(
 
     alpha = (final_temp / t0) ** (1.0 / max(main_iters, 1))
     temperature = t0
-    stagnation = 0
-    stagnation_limit = max(300, n_customers * 12)
-    intensify_interval = max(600, n_customers * 14)
-    no_best_improvement = 0
-    early_stop_patience = max(1400, n_customers * 26)
 
     for _ in range(main_iters):
-        improved_global = False
         new_solution, op_id = apply_selected_operator(
             data,
             incumbent,
             rng,
             n_drones=n_drones,
-            probabilities=(adaptive_probs[0], adaptive_probs[1], adaptive_probs[2]),
+            probabilities=probabilities,
         )
 
         new_obj = score_solution(data, new_solution, n_drones=n_drones)
-        reward = 0.0
         if math.isfinite(new_obj):
             delta = new_obj - incumbent_obj
 
             if delta < 0:
                 incumbent = new_solution
                 incumbent_obj = new_obj
-                reward = 3.0
                 if incumbent_obj < best_obj:
                     best_solution = deepcopy(incumbent)
                     best_obj = incumbent_obj
-                    improved_global = True
-                    reward = 5.0
-                    no_best_improvement = 0
             else:
                 acceptance_probability = math.exp(-delta / max(temperature, 1e-12))
                 if rng.random() < acceptance_probability:
                     incumbent = new_solution
                     incumbent_obj = new_obj
-                    reward = 1.0
-
-        op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1] + reward
-
-        if improved_global:
-            stagnation = 0
-        else:
-            stagnation += 1
-            no_best_improvement += 1
-
-        # Periodic quality-focused intensification, especially impactful on larger instances.
-        if (_ + 1) % intensify_interval == 0:
-            intensified, intensified_obj = intensify_solution(
-                data=data,
-                solution=incumbent,
-                rng=rng,
-                n_drones=n_drones,
-                rounds=2 if n_customers >= 50 else 1,
-            )
-            if intensified_obj < incumbent_obj:
-                incumbent = intensified
-                incumbent_obj = intensified_obj
-                if incumbent_obj < best_obj:
-                    best_solution = deepcopy(incumbent)
-                    best_obj = incumbent_obj
-                    stagnation = 0
-                    no_best_improvement = 0
-
-        # Periodically refresh probabilities from operator scores with smoothing floor.
-        if (_ + 1) % adapt_interval == 0:
-            total_score = sum(max(1e-9, s) for s in op_scores)
-            raw = [max(1e-9, s) / total_score for s in op_scores]
-            adaptive_probs = [min_prob + (1.0 - 3.0 * min_prob) * p for p in raw]
-
-        # Reheat and perturb when stuck to improve robustness on larger instances.
-        if stagnation >= stagnation_limit:
-            temperature = max(temperature, 0.35 * t0)
-            # Restart from elite, then perturb structurally and by drone reassignment.
-            incumbent = deepcopy(best_solution)
-            incumbent = op2_truck_2opt_repair(data, incumbent, rng, n_drones=n_drones, samples=14)
-            incumbent = op3_drone_reassign_best_anchor(data, incumbent, rng, n_drones=n_drones)
-            incumbent, incumbent_obj = intensify_solution(
-                data=data,
-                solution=incumbent,
-                rng=rng,
-                n_drones=n_drones,
-                rounds=1,
-            )
-            stagnation = 0
-
-        # Stop late, unproductive tail iterations to improve quality/time efficiency.
-        if no_best_improvement >= early_stop_patience and temperature <= max(final_temp * 4.0, 0.18 * t0):
-            break
 
         temperature = alpha * temperature
 
@@ -802,63 +675,6 @@ def run_configuration(
     return rows, best_solutions
 
 
-def select_tuned_weights_for_instance(
-    data: Dict[str, Any],
-    base_weights: Tuple[float, float, float],
-    seed: int,
-    n_drones: int,
-) -> Tuple[float, float, float]:
-    """Pick robust tuned weights using a very small pilot search."""
-    equal_weights = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0)
-    candidates: List[Tuple[float, float, float]] = [
-        base_weights,
-        (0.50, 0.20, 0.30),
-        (0.45, 0.20, 0.35),
-        (0.55, 0.15, 0.30),
-        (0.40, 0.20, 0.40),
-        (0.35, 0.25, 0.40),
-    ]
-
-    best_weights = base_weights
-    best_score = float("inf")
-    large_instance = data.get("name") in LARGE_INSTANCE_NAMES
-    pilot_runs = 5 if large_instance else 3
-    pilot_warmup = 20 if large_instance else 12
-    pilot_iters = 260 if large_instance else 180
-    variance_penalty = 0.15 if large_instance else 0.05
-
-    for weights in candidates:
-        if abs(sum(weights) - 1.0) > 1e-9:
-            continue
-
-        pilot_scores: List[float] = []
-        for k in range(pilot_runs):
-            rng = random.Random(seed + k)
-            _, objective, _ = run_modified_simulated_annealing(
-                data=data,
-                rng=rng,
-                n_drones=n_drones,
-                probabilities=weights,
-                warmup_iters=pilot_warmup,
-                main_iters=pilot_iters,
-                final_temp=0.1,
-            )
-            pilot_scores.append(objective)
-
-        avg_score = sum(pilot_scores) / len(pilot_scores)
-        spread = pstdev(pilot_scores) if len(pilot_scores) > 1 else 0.0
-        robust_score = avg_score + variance_penalty * spread
-        if robust_score < best_score:
-            best_score = robust_score
-            best_weights = weights
-
-    # Tuned mode must remain tuned (different from equal weights).
-    if all(abs(best_weights[i] - equal_weights[i]) < 1e-9 for i in range(3)):
-        best_weights = base_weights
-
-    return best_weights
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="INF273 Assignment 4 - Modified SA with 3 operators")
     parser.add_argument("--runs", type=int, default=10)
@@ -911,6 +727,7 @@ def main() -> None:
         print(f"{instance_name}-new-operators-equal-weights")
         print("=" * 70)
 
+        # Same weights algorithm execution
         rows_eq, best_eq = run_configuration(
             method_name="SA-new operators (equal weights)",
             probabilities=equal_weights,
@@ -932,18 +749,9 @@ def main() -> None:
         if not instance_file.exists():
             continue
 
-        data = read_instance(str(instance_file))
-        # For large instances, avoid costly pilot tuning and rely on explicit gate decision.
-        if instance_name in LARGE_INSTANCE_NAMES:
-            tuned_for_instance = tuned_weights
-        else:
-            tuned_for_instance = select_tuned_weights_for_instance(
-                data=data,
-                base_weights=tuned_weights,
-                seed=args.seed,
-                n_drones=args.n_drones,
-            )
+        tuned_for_instance = tuned_weights
 
+        # Tuned weights algorithm execution
         print("\n" + "=" * 70)
         print(f"{instance_name}-new-operators-tuned-weights")
         print(
