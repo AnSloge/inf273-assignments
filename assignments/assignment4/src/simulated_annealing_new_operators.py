@@ -452,34 +452,47 @@ def run_modified_simulated_annealing(
     best_solution = deepcopy(incumbent)
     best_obj = incumbent_obj
 
+    # Online operator adaptation: start from configured weights and learn during search.
+    adaptive_probs = [float(probabilities[0]), float(probabilities[1]), float(probabilities[2])]
+    op_scores = [1.0, 1.0, 1.0]
+    adapt_interval = max(80, n_customers * 2)
+    min_prob = 0.10
+
     warmup_deltas: List[float] = []
     started = time.perf_counter()
 
     for _ in range(warmup_iters):
-        new_solution, _ = apply_selected_operator(
+        new_solution, op_id = apply_selected_operator(
             data,
             incumbent,
             rng,
             n_drones=n_drones,
-            probabilities=probabilities,
+            probabilities=(adaptive_probs[0], adaptive_probs[1], adaptive_probs[2]),
         )
 
         new_obj = score_solution(data, new_solution, n_drones=n_drones)
+        reward = 0.0
         if not math.isfinite(new_obj):
+            op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1]
             continue
         delta = new_obj - incumbent_obj
 
         if delta < 0:
             incumbent = new_solution
             incumbent_obj = new_obj
+            reward = 3.0
             if incumbent_obj < best_obj:
                 best_solution = deepcopy(incumbent)
                 best_obj = incumbent_obj
+                reward = 5.0
         else:
             if rng.random() < 0.8:
                 incumbent = new_solution
                 incumbent_obj = new_obj
+                reward = 1.0
             warmup_deltas.append(delta)
+
+        op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1] + reward
 
     delta_avg = mean(warmup_deltas) if warmup_deltas else 1.0
     if delta_avg <= 0 or not math.isfinite(delta_avg):
@@ -496,40 +509,55 @@ def run_modified_simulated_annealing(
 
     for _ in range(main_iters):
         improved_global = False
-        new_solution, _ = apply_selected_operator(
+        new_solution, op_id = apply_selected_operator(
             data,
             incumbent,
             rng,
             n_drones=n_drones,
-            probabilities=probabilities,
+            probabilities=(adaptive_probs[0], adaptive_probs[1], adaptive_probs[2]),
         )
 
         new_obj = score_solution(data, new_solution, n_drones=n_drones)
+        reward = 0.0
         if math.isfinite(new_obj):
             delta = new_obj - incumbent_obj
 
             if delta < 0:
                 incumbent = new_solution
                 incumbent_obj = new_obj
+                reward = 3.0
                 if incumbent_obj < best_obj:
                     best_solution = deepcopy(incumbent)
                     best_obj = incumbent_obj
                     improved_global = True
+                    reward = 5.0
             else:
                 acceptance_probability = math.exp(-delta / max(temperature, 1e-12))
                 if rng.random() < acceptance_probability:
                     incumbent = new_solution
                     incumbent_obj = new_obj
+                    reward = 1.0
+
+        op_scores[op_id - 1] = 0.9 * op_scores[op_id - 1] + reward
 
         if improved_global:
             stagnation = 0
         else:
             stagnation += 1
 
+        # Periodically refresh probabilities from operator scores with smoothing floor.
+        if (_ + 1) % adapt_interval == 0:
+            total_score = sum(max(1e-9, s) for s in op_scores)
+            raw = [max(1e-9, s) / total_score for s in op_scores]
+            adaptive_probs = [min_prob + (1.0 - 3.0 * min_prob) * p for p in raw]
+
         # Reheat and perturb when stuck to improve robustness on larger instances.
         if stagnation >= stagnation_limit:
             temperature = max(temperature, 0.35 * t0)
-            incumbent = op2_truck_2opt_repair(data, incumbent, rng, n_drones=n_drones, samples=4)
+            # Restart from elite, then perturb structurally and by drone reassignment.
+            incumbent = deepcopy(best_solution)
+            incumbent = op2_truck_2opt_repair(data, incumbent, rng, n_drones=n_drones, samples=5)
+            incumbent = op3_drone_reassign_best_anchor(data, incumbent, rng, n_drones=n_drones)
             incumbent_obj = score_solution(data, incumbent, n_drones=n_drones)
             stagnation = 0
 
