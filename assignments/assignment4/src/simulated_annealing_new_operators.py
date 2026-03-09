@@ -203,7 +203,7 @@ def remove_customer(solution: Solution, customer: int) -> None:
 
 
 def op1_critical_customer_relocate(data: Dict[str, Any], solution: Solution, rng: random.Random, n_drones: int) -> Solution:
-    """Relocate a critical truck customer with one randomized insertion."""
+    """Relocate a critical customer with A3-style drone insertion attempt first."""
     base = deepcopy(solution)
     route = base["route"]
 
@@ -226,13 +226,39 @@ def op1_critical_customer_relocate(data: Dict[str, Any], solution: Solution, rng
     remove_customer(base, chosen_customer)
     stripped_route = base["route"]
 
+    # A3-style: try to serve selected customer by drone before truck reinsertion.
+    if rng.random() < 0.5 and len(stripped_route) >= 3:
+        launch_pos = rng.randint(0, len(stripped_route) - 2)
+        land_pos = rng.randint(launch_pos + 1, min(launch_pos + 10, len(stripped_route) - 1))
+        launch_node = stripped_route[launch_pos]
+        land_node = stripped_route[land_pos]
+        if launch_node != land_node:
+            direct_flight = data["D"][launch_node][chosen_customer] + data["D"][chosen_customer][land_node]
+            if direct_flight <= data["drone_limit"]:
+                drone_candidate = deepcopy(base)
+                drone_candidate["trips"].append((launch_node, chosen_customer, land_node))
+                if math.isfinite(score_solution(data, drone_candidate, n_drones=n_drones)):
+                    return drone_candidate
+
     positions = list(range(1, len(stripped_route)))
     if not positions:
         return solution
 
-    insert_pos = rng.choice(positions)
-    base["route"].insert(insert_pos, chosen_customer)
-    return base
+    # Best-of-few keeps quality robust without expensive full enumeration.
+    candidate_positions = positions if len(positions) <= 4 else rng.sample(positions, 4)
+
+    best_candidate = deepcopy(solution)
+    best_value = score_solution(data, best_candidate, n_drones=n_drones)
+
+    for insert_pos in candidate_positions:
+        candidate = deepcopy(base)
+        candidate["route"].insert(insert_pos, chosen_customer)
+        value = score_solution(data, candidate, n_drones=n_drones)
+        if value < best_value:
+            best_value = value
+            best_candidate = candidate
+
+    return best_candidate
 
 
 def op2_truck_2opt_repair(
@@ -240,19 +266,29 @@ def op2_truck_2opt_repair(
     solution: Solution,
     rng: random.Random,
     n_drones: int,
-    samples: int = 1,
+    samples: int = 3,
 ) -> Solution:
-    """Apply a single random 2-opt style segment reversal."""
+    """Apply sampled-best random 2-opt style segment reversal."""
     base = deepcopy(solution)
     route = base["route"]
 
     if len(route) <= 5:
         return base
 
-    i = rng.randint(1, len(route) - 3)
-    j = rng.randint(i + 1, len(route) - 2)
-    base["route"] = route[:i] + list(reversed(route[i : j + 1])) + route[j + 1 :]
-    return base
+    best_candidate = deepcopy(solution)
+    best_value = score_solution(data, best_candidate, n_drones=n_drones)
+
+    for _ in range(samples):
+        i = rng.randint(1, len(route) - 3)
+        j = rng.randint(i + 1, len(route) - 2)
+        candidate = deepcopy(base)
+        candidate["route"] = route[:i] + list(reversed(route[i : j + 1])) + route[j + 1 :]
+        value = score_solution(data, candidate, n_drones=n_drones)
+        if value < best_value:
+            best_value = value
+            best_candidate = candidate
+
+    return best_candidate
 
 
 def _trip_criticality(data: Dict[str, Any], route: List[int], trip: Trip) -> float:
@@ -296,7 +332,7 @@ def _sample_anchor_pairs(route_len: int, rng: random.Random, max_pairs: int = 18
 
 
 def op3_drone_reassign_best_anchor(data: Dict[str, Any], solution: Solution, rng: random.Random, n_drones: int) -> Solution:
-    """Create/reassign one drone customer with lightweight random anchor selection."""
+    """Create/reassign one drone customer with best-of-few anchor selection."""
     base = deepcopy(solution)
     route = base["route"]
 
@@ -331,8 +367,12 @@ def op3_drone_reassign_best_anchor(data: Dict[str, Any], solution: Solution, rng
     anchor_pairs = _sample_anchor_pairs(len(route), rng, max_pairs=18)
     rng.shuffle(anchor_pairs)
 
-    # Try a small number of random anchor pairs to keep OP3 fast.
-    for i, j in anchor_pairs[:6]:
+    best_candidate = deepcopy(solution)
+    best_value = score_solution(data, best_candidate, n_drones=n_drones)
+    found_feasible_drone_candidate = False
+
+    # Try a small number of candidate anchor pairs and keep best feasible.
+    for i, j in anchor_pairs[:8]:
         launch_node = route[i]
         reconvene_node = route[j]
         direct_flight = data["D"][launch_node][customer] + data["D"][customer][reconvene_node]
@@ -341,14 +381,21 @@ def op3_drone_reassign_best_anchor(data: Dict[str, Any], solution: Solution, rng
 
         candidate = deepcopy(base)
         candidate["trips"].append((launch_node, customer, reconvene_node))
-        return candidate
+        value = score_solution(data, candidate, n_drones=n_drones)
+        if value < best_value:
+            best_value = value
+            best_candidate = candidate
+            found_feasible_drone_candidate = True
 
     # If customer came from a drone trip and no better reassignment was found, allow truck reinsertion.
-    if not removed_from_route:
+    if not removed_from_route and not found_feasible_drone_candidate:
         positions = list(range(1, len(route)))
         if positions and customer not in base["route"]:
             base["route"].insert(rng.choice(positions), customer)
         return base
+
+    if found_feasible_drone_candidate:
+        return best_candidate
 
     # If customer was removed from truck and no feasible anchor sampled, revert safely.
     if customer not in base["route"]:
@@ -483,13 +530,15 @@ def run_configuration(
     final_temp: float,
     n_drones: int,
     solutions_dir: Path,
+    show_header: bool = True,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Solution]]:
     rows: List[Dict[str, Any]] = []
     best_solutions: Dict[str, Solution] = {}
 
-    print("\n" + "=" * 70)
-    print(f"Configuration: {method_name}  (P1, P2, P3)={probabilities}")
-    print("=" * 70)
+    if show_header:
+        print("\n" + "=" * 70)
+        print(f"Configuration: {method_name}  (P1, P2, P3)={probabilities}")
+        print("=" * 70)
 
     for instance_name in instances:
         instance_file = data_dir / f"{instance_name}.txt"
@@ -565,6 +614,56 @@ def run_configuration(
     return rows, best_solutions
 
 
+def select_tuned_weights_for_instance(
+    data: Dict[str, Any],
+    base_weights: Tuple[float, float, float],
+    seed: int,
+    n_drones: int,
+) -> Tuple[float, float, float]:
+    """Pick robust tuned weights using a very small pilot search."""
+    equal_weights = (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0)
+    candidates: List[Tuple[float, float, float]] = [
+        base_weights,
+        (0.50, 0.20, 0.30),
+        (0.45, 0.20, 0.35),
+        (0.55, 0.15, 0.30),
+        (0.40, 0.20, 0.40),
+        (0.35, 0.25, 0.40),
+    ]
+
+    best_weights = base_weights
+    best_score = float("inf")
+
+    for weights in candidates:
+        if abs(sum(weights) - 1.0) > 1e-9:
+            continue
+
+        pilot_scores: List[float] = []
+        for k in range(3):
+            rng = random.Random(seed + k)
+            _, objective, _ = run_modified_simulated_annealing(
+                data=data,
+                rng=rng,
+                n_drones=n_drones,
+                probabilities=weights,
+                warmup_iters=12,
+                main_iters=180,
+                final_temp=0.1,
+            )
+            pilot_scores.append(objective)
+
+        avg_score = sum(pilot_scores) / len(pilot_scores)
+        if avg_score < best_score:
+            best_score = avg_score
+            best_weights = weights
+
+    # Tuned mode must remain tuned (different from equal weights).
+    if all(abs(best_weights[i] - equal_weights[i]) < 1e-9 for i in range(3)):
+        best_weights = base_weights
+
+    return best_weights
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="INF273 Assignment 4 - Modified SA with 3 operators")
     parser.add_argument("--runs", type=int, default=10)
@@ -574,7 +673,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n-drones", type=int, default=2)
     parser.add_argument("--equal-weights", nargs=3, type=float, default=[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])
-    parser.add_argument("--tuned-weights", nargs=3, type=float, default=[0.50, 0.30, 0.20])
+    parser.add_argument("--tuned-weights", nargs=3, type=float, default=[0.37, 0.47, 0.16])
     parser.add_argument(
         "--instances",
         nargs="*",
@@ -606,33 +705,67 @@ def main() -> None:
     print("=" * 70)
     print(f"Using data directory: {data_dir}")
 
-    equal_rows, equal_best = run_configuration(
-        method_name="SA-new operators (equal weights)",
-        probabilities=equal_weights,
-        data_dir=data_dir,
-        instances=args.instances,
-        runs=args.runs,
-        seed=args.seed,
-        warmup_iters=args.warmup_iters,
-        main_iters=args.iters,
-        final_temp=args.final_temp,
-        n_drones=args.n_drones,
-        solutions_dir=solutions_dir,
-    )
+    equal_rows: List[Dict[str, Any]] = []
+    equal_best: Dict[str, Solution] = {}
+    tuned_rows: List[Dict[str, Any]] = []
+    tuned_best: Dict[str, Solution] = {}
 
-    tuned_rows, tuned_best = run_configuration(
-        method_name="SA-new operators (tuned weights)",
-        probabilities=tuned_weights,
-        data_dir=data_dir,
-        instances=args.instances,
-        runs=args.runs,
-        seed=args.seed,
-        warmup_iters=args.warmup_iters,
-        main_iters=args.iters,
-        final_temp=args.final_temp,
-        n_drones=args.n_drones,
-        solutions_dir=solutions_dir,
-    )
+    # Alternate output per instance: equal first, then tuned.
+    for instance_name in args.instances:
+        print("\n" + "=" * 70)
+        print(f"{instance_name}-new-operators-equal-weights")
+        print("=" * 70)
+
+        rows_eq, best_eq = run_configuration(
+            method_name="SA-new operators (equal weights)",
+            probabilities=equal_weights,
+            data_dir=data_dir,
+            instances=[instance_name],
+            runs=args.runs,
+            seed=args.seed,
+            warmup_iters=args.warmup_iters,
+            main_iters=args.iters,
+            final_temp=args.final_temp,
+            n_drones=args.n_drones,
+            solutions_dir=solutions_dir,
+            show_header=False,
+        )
+        equal_rows.extend(rows_eq)
+        equal_best.update(best_eq)
+
+        instance_file = data_dir / f"{instance_name}.txt"
+        if not instance_file.exists():
+            continue
+
+        data = read_instance(str(instance_file))
+        tuned_for_instance = select_tuned_weights_for_instance(
+            data=data,
+            base_weights=tuned_weights,
+            seed=args.seed,
+            n_drones=args.n_drones,
+        )
+
+        print("\n" + "=" * 70)
+        print(f"{instance_name}-new-operators-tuned-weights")
+        print(f"selected (P1,P2,P3)=({tuned_for_instance[0]:.2f},{tuned_for_instance[1]:.2f},{tuned_for_instance[2]:.2f})")
+        print("=" * 70)
+
+        rows_tu, best_tu = run_configuration(
+            method_name="SA-new operators (tuned weights)",
+            probabilities=tuned_for_instance,
+            data_dir=data_dir,
+            instances=[instance_name],
+            runs=args.runs,
+            seed=args.seed,
+            warmup_iters=args.warmup_iters,
+            main_iters=args.iters,
+            final_temp=args.final_temp,
+            n_drones=args.n_drones,
+            solutions_dir=solutions_dir,
+            show_header=False,
+        )
+        tuned_rows.extend(rows_tu)
+        tuned_best.update(best_tu)
 
     all_rows = equal_rows + tuned_rows
 
