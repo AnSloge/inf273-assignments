@@ -1,0 +1,52 @@
+Simulated Annealing (modified for assignment #4)
+
+1:  Input: initial solution (s0)
+2:  Input: neighborhood operators: OP1, OP2, and OP3
+3:  Parameters: Tf (final temperature) = 0.1
+4:  Parameters: P1 (probability of using OP1), P2, and P3
+5:  Input: evaluation function f, f(s) → the cost of s
+
+6:  Incumbent ← s0, BestSolution ← s0
+
+7:  for w = 1 to 100
+8:      NewSolution ← select & apply an Operator on Incumbent (Roulette wheel selection)
+9:      ΔE ← f(NewSolution) − f(Incumbent)
+
+10:     if NewSolution is feasible and ΔE < 0 then
+11:         Incumbent ← NewSolution
+12:         if f(Incumbent) < f(BestSolution) then
+13:             BestSolution ← Incumbent
+14:         end if
+
+15:     elseif NewSolution is feasible
+16:         if Rand < 0.8 then
+17:             Incumbent ← NewSolution
+18:         end if
+
+19:         Δw ← ΔE
+20:     end if
+21: end for
+
+22: DeltaAvg = mean(Δw)
+
+23: T0 = -DeltaAvg / ln(0.8)
+24: α = (Tf / T0)^(1/9900)
+
+25: T ← T0
+
+26: for iteration = 1 to 9900
+27:     NewSolution ← select & apply an Operator on Incumbent (Roulette wheel selection)
+28:     ΔE ← f(NewSolution) − f(Incumbent)
+
+29:     if NewSolution is feasible and ΔE < 0 then
+30:         Incumbent ← NewSolution
+31:         if f(Incumbent) < f(BestSolution) then
+32:             BestSolution ← Incumbent
+33:         end if
+
+34:     elseif NewSolution is feasible and Rand < p = e^(−ΔE / T) then
+35:         Incumbent ← NewSolution
+36:     end if
+
+37:     T = α * T
+38: end for
