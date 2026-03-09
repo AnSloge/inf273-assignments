@@ -49,7 +49,16 @@ def read_instance(path: str) -> Dict[str, Any]:
     }
 
 
+def _scaled_iteration_budget(warmup_iters: int, main_iters: int, n_customers: int) -> Tuple[int, int]:
+    """Scale search effort with instance size (stronger on larger instances)."""
+    factor = max(1.0, math.sqrt(max(1, n_customers) / 20.0))
+    scaled_warmup = int(round(warmup_iters * factor))
+    scaled_main = int(round(main_iters * factor))
+    return max(20, scaled_warmup), max(200, scaled_main)
+
+
 def initial_solution(data: Dict[str, Any]) -> Solution:
+    """Assignment-required initial solution: truck serves customers in index order."""
     return {
         "route": [0] + list(range(1, data["n_customers"] + 1)) + [0],
         "trips": [],
@@ -275,10 +284,12 @@ def op2_truck_2opt_repair(
     if len(route) <= 5:
         return base
 
+    dynamic_samples = max(samples, min(16, 2 + len(route) // 12))
+
     best_candidate = deepcopy(solution)
     best_value = score_solution(data, best_candidate, n_drones=n_drones)
 
-    for _ in range(samples):
+    for _ in range(dynamic_samples):
         i = rng.randint(1, len(route) - 3)
         j = rng.randint(i + 1, len(route) - 2)
         candidate = deepcopy(base)
@@ -364,7 +375,8 @@ def op3_drone_reassign_best_anchor(data: Dict[str, Any], solution: Solution, rng
             base["route"].remove(customer)
             removed_from_route = True
 
-    anchor_pairs = _sample_anchor_pairs(len(route), rng, max_pairs=18)
+    pair_budget = min(60, 12 + len(route) // 2)
+    anchor_pairs = _sample_anchor_pairs(len(route), rng, max_pairs=pair_budget)
     rng.shuffle(anchor_pairs)
 
     best_candidate = deepcopy(solution)
@@ -372,7 +384,7 @@ def op3_drone_reassign_best_anchor(data: Dict[str, Any], solution: Solution, rng
     found_feasible_drone_candidate = False
 
     # Try a small number of candidate anchor pairs and keep best feasible.
-    for i, j in anchor_pairs[:8]:
+    for i, j in anchor_pairs[:12]:
         launch_node = route[i]
         reconvene_node = route[j]
         direct_flight = data["D"][launch_node][customer] + data["D"][customer][reconvene_node]
@@ -431,6 +443,9 @@ def run_modified_simulated_annealing(
     main_iters: int = 9900,
     final_temp: float = 0.1,
 ) -> Tuple[Solution, float, float]:
+    n_customers = data["n_customers"]
+    warmup_iters, main_iters = _scaled_iteration_budget(warmup_iters, main_iters, n_customers)
+
     incumbent = initial_solution(data)
     incumbent_obj = score_solution(data, incumbent, n_drones=n_drones)
 
@@ -476,8 +491,11 @@ def run_modified_simulated_annealing(
 
     alpha = (final_temp / t0) ** (1.0 / max(main_iters, 1))
     temperature = t0
+    stagnation = 0
+    stagnation_limit = max(300, n_customers * 12)
 
     for _ in range(main_iters):
+        improved_global = False
         new_solution, _ = apply_selected_operator(
             data,
             incumbent,
@@ -496,11 +514,24 @@ def run_modified_simulated_annealing(
                 if incumbent_obj < best_obj:
                     best_solution = deepcopy(incumbent)
                     best_obj = incumbent_obj
+                    improved_global = True
             else:
                 acceptance_probability = math.exp(-delta / max(temperature, 1e-12))
                 if rng.random() < acceptance_probability:
                     incumbent = new_solution
                     incumbent_obj = new_obj
+
+        if improved_global:
+            stagnation = 0
+        else:
+            stagnation += 1
+
+        # Reheat and perturb when stuck to improve robustness on larger instances.
+        if stagnation >= stagnation_limit:
+            temperature = max(temperature, 0.35 * t0)
+            incumbent = op2_truck_2opt_repair(data, incumbent, rng, n_drones=n_drones, samples=4)
+            incumbent_obj = score_solution(data, incumbent, n_drones=n_drones)
+            stagnation = 0
 
         temperature = alpha * temperature
 
