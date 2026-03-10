@@ -1,0 +1,7 @@
+Instance: F_10
+Method: SA-new operators (equal weights)
+Average objective: 1515.1
+Best objective: 1497.0
+Improvement (%): 52.0
+Average running time (s): 2.840
+Best solution string: 0,7,4,8,9,2,10,0|3,1,6,-1,5|2,4,6,-1,2|4,5,7,-1,4

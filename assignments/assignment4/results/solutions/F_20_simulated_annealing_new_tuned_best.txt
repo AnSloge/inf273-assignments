@@ -1,0 +1,7 @@
+Instance: F_20
+Method: SA-new operators (tuned weights)
+Average objective: 3573.9
+Best objective: 3386.0
+Improvement (%): 66.8
+Average running time (s): 5.203
+Best solution string: 0,8,7,14,1,18,4,9,17,12,20,10,0|16,6,5,2,3,19,-1,15,11,13|2,3,4,9,10,11,-1,3,5,9|3,4,7,10,11,12,-1,5,8,11

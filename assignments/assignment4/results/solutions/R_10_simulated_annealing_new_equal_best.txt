@@ -1,0 +1,7 @@
+Instance: R_10
+Method: SA-new operators (equal weights)
+Average objective: 704.4
+Best objective: 596.0
+Improvement (%): 76.7
+Average running time (s): 3.205
+Best solution string: 0,2,9,1,8,5,0|10,6,-1,4,7,3|1,2,-1,2,4,5|2,7,-1,4,5,6
